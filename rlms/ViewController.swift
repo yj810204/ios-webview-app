@@ -76,7 +76,9 @@ extension ViewController: UIDocumentInteractionControllerDelegate {
     }
 }
 
-class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHandler, WKUIDelegate, UIScrollViewDelegate {
+class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHandler, WKUIDelegate, UIScrollViewDelegate, CLLocationManagerDelegate {
+    
+    let locationManager = CLLocationManager()
     
     let alignUrl = "https://howtattoo.co.kr/"
 //    let alignUrl = "https://rlms.snctek.com/"
@@ -103,6 +105,9 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         subWebViewInit(_loadUrl: alignUrl, _type: "Main")
         
         NotificationCenter.default.addObserver(self, selector: #selector(dispFCMToken(notification:)), name: Notification.Name("FCMToken"), object: nil)
+        
+        locationManager.delegate = self
+        locationManager.requestWhenInUseAuthorization()
     }
     
     @objc func reloadWebView(_ sender: UIRefreshControl) {
@@ -458,6 +463,7 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         self.addJavaScriptBridgeClose()
         self.addJavaScriptBridgeTest()
         self.addJavaScriptMetaTag()
+        self.addJavaScriptBridgeLocation()
 
         // [웹뷰 전체 화면 사이즈 설정 실시 : 상태 창 제외]
         subWebView.frame = CGRect.init(
@@ -511,6 +517,11 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
     // MARK: [자바스크립트 통신을 위한 초기화 부분]
     let javascriptController = WKUserContentController()
     let javascriptConfig = WKWebViewConfiguration()
+    
+    func addJavaScriptBridgeLocation() {
+        self.javascriptController.add(self, name: "location")
+        self.javascriptConfig.userContentController = self.javascriptController
+    }
         
     func addJavaScriptBridgeOpen(){
         print("")
@@ -614,6 +625,15 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
             
             // MARK: [웹 코드] function receive_Close(value) {} : IOS >> 자바스크립트 데이터 전송 실시
             self.sendFunctionTest(_send: "") // 널 데이터
+        }
+        
+        if message.name == "location" {
+            print("JS에서 위치 요청 받음")
+            if CLLocationManager.authorizationStatus() == .authorizedWhenInUse || CLLocationManager.authorizationStatus() == .authorizedAlways {
+                locationManager.requestLocation()
+            } else {
+                locationManager.requestWhenInUseAuthorization()
+            }
         }
     }
     
@@ -837,6 +857,7 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         print("")
     }
     
+    var hasSentLocation = false
     
     // [웹뷰 로드 수행 완료 부분]
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -865,6 +886,15 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
             }
         }
         //self.activityIndicator.stopAnimating() // 로딩 종료 (사용하지 않을 때 주석)
+        
+        // 위치 전달은 한 번만
+        if !hasSentLocation {
+            hasSentLocation = true
+            if CLLocationManager.authorizationStatus() == .authorizedWhenInUse ||
+                CLLocationManager.authorizationStatus() == .authorizedAlways {
+                locationManager.requestLocation()
+            }
+        }
         
     }
     
@@ -1247,6 +1277,34 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
 
         // [network 통신 실행]
         dataTask.resume()
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+
+        let lat = location.coordinate.latitude
+        let lng = location.coordinate.longitude
+
+        //DOM이 준비된 이후에 JS 실행
+        let js = """
+            window.dispatchEvent(new CustomEvent('nativeLocation', {
+                detail: { lat: \(lat), lng: \(lng) }
+            }));
+        """
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.subWebView.evaluateJavaScript(js) { result, error in
+                if let error = error {
+                    print("JS 실행 오류: \(error)")
+                } else {
+                    print("위치 JS 전달 완료: \(lat), \(lng)")
+                }
+            }
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        print("위치 가져오기 실패:", error.localizedDescription)
     }
 
 }
