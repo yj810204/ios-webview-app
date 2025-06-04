@@ -108,6 +108,12 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         
         locationManager.delegate = self
         locationManager.requestWhenInUseAuthorization()
+        
+        // 이미 권한이 있다면 즉시 요청
+        let status = CLLocationManager.authorizationStatus()
+        if status == .authorizedWhenInUse || status == .authorizedAlways {
+            locationManager.requestLocation()
+        }
     }
     
     @objc func reloadWebView(_ sender: UIRefreshControl) {
@@ -1285,26 +1291,44 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         let lat = location.coordinate.latitude
         let lng = location.coordinate.longitude
 
-        //DOM이 준비된 이후에 JS 실행
-        let js = """
+        let startJs = "window.dispatchEvent(new CustomEvent('nativeLocationRequest'));"
+        let endJs = """
             window.dispatchEvent(new CustomEvent('nativeLocation', {
                 detail: { lat: \(lat), lng: \(lng) }
             }));
         """
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.subWebView.evaluateJavaScript(js) { result, error in
-                if let error = error {
-                    print("JS 실행 오류: \(error)")
-                } else {
-                    print("위치 JS 전달 완료: \(lat), \(lng)")
+        DispatchQueue.main.async {
+            // 요청 시작 알림
+            self.subWebView.evaluateJavaScript(startJs, completionHandler: nil)
+
+            // 위치 전달
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.subWebView.evaluateJavaScript(endJs) { result, error in
+                    if let error = error {
+                        print("JS 실행 오류: \(error)")
+                    } else {
+                        print("위치 JS 전달 완료: \(lat), \(lng)")
+                    }
                 }
             }
         }
     }
-
+    
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         print("위치 가져오기 실패:", error.localizedDescription)
+
+        let failJs = "window.dispatchEvent(new CustomEvent('nativeLocationFail', { detail: { message: '\(error.localizedDescription)' } }));"
+        DispatchQueue.main.async {
+            self.subWebView.evaluateJavaScript(failJs, completionHandler: nil)
+        }
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
+        if status == .authorizedWhenInUse || status == .authorizedAlways {
+            print("위치 권한 승인됨 → 즉시 요청")
+            locationManager.requestLocation()
+        }
     }
 
 }
