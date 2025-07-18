@@ -167,6 +167,11 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
     //private var mainWebView: WKWebView? = nil
     var popupWebView: WKWebView?
     
+    // 위치 관련 UI 요소를 추가합니다
+    private var locationStatusView: UIView?
+    private var locationStatusLabel: UILabel?
+    private var locationIndicator: UIActivityIndicatorView?
+    
     // [ViewController 종료 시 호출되는 함수]
     deinit {
         // WKWebView Progress 퍼센트 가져오기 이벤트 제거
@@ -508,6 +513,9 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         let request = URLRequest(url: url! as URL)
         subWebView.load(request)
         
+        // JavaScript 피드백 코드 주입
+        injectLocationFeedbackJS()
+        
 //        //웹뷰 쿠키 가져오기
 //        func getCookie() {
 //            subWebView.evaluateJavaScript("document.cookie") { (result, error) in
@@ -586,6 +594,134 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         self.javascriptController.addUserScript(script)
     }
     
+    // JavaScript 피드백 코드 주입 함수
+    func injectLocationFeedbackJS() {
+        let js = """
+        // 웹페이지에 추가할 JavaScript 코드
+        document.addEventListener('DOMContentLoaded', function() {
+            // 위치 상태 표시 UI 요소 생성
+            const locationStatusContainer = document.createElement('div');
+            locationStatusContainer.id = 'location-status-container';
+            locationStatusContainer.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background-color: rgba(0, 0, 0, 0.7);
+                color: white;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-size: 14px;
+                z-index: 9999;
+                display: none;
+                max-width: 90%;
+                text-align: center;
+            `;
+            document.body.appendChild(locationStatusContainer);
+
+            // 로딩 인디케이터 생성
+            const spinner = document.createElement('div');
+            spinner.className = 'location-spinner';
+            spinner.style.cssText = `
+                display: inline-block;
+                width: 16px;
+                height: 16px;
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                border-radius: 50%;
+                border-top-color: white;
+                animation: location-spin 1s linear infinite;
+                margin-right: 8px;
+                vertical-align: middle;
+            `;
+            
+            // 스피너 애니메이션 추가
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes location-spin {
+                    to { transform: rotate(360deg); }
+                }
+            `;
+            document.head.appendChild(style);
+
+            // 상태 메시지 요소 생성
+            const statusText = document.createElement('span');
+            statusText.id = 'location-status-text';
+            
+            // 컨테이너에 요소 추가
+            locationStatusContainer.appendChild(spinner);
+            locationStatusContainer.appendChild(statusText);
+
+            // 위치 요청 시작 이벤트 리스너
+            window.addEventListener('nativeLocationRequest', function() {
+                showLocationStatus('위치 정보를 가져오는 중...');
+            });
+
+            // 위치 수신 이벤트 리스너
+            window.addEventListener('nativeLocation', function(e) {
+                const { lat, lng } = e.detail;
+                showLocationStatus(`위치 정보 수신 완료: ${lat.toFixed(4)}, ${lng.toFixed(4)}`, 'success');
+                
+                // 여기서 수신된 위치 정보로 원하는 작업 수행
+                // 예: 폼 필드 업데이트, API 호출 등
+                
+                // 2초 후 상태 표시 숨기기
+                setTimeout(hideLocationStatus, 2000);
+            });
+
+            // 위치 오류 이벤트 리스너
+            window.addEventListener('nativeLocationFail', function(e) {
+                showLocationStatus(`위치 정보 오류: ${e.detail.message}`, 'error');
+                // 5초 후 상태 표시 숨기기
+                setTimeout(hideLocationStatus, 5000);
+            });
+        });
+
+        // 위치 정보 요청 함수
+        function requestLocation() {
+            // 상태 표시
+            showLocationStatus('위치 정보 요청 중...');
+            
+            // 네이티브 앱에 위치 요청
+            try {
+                window.webkit.messageHandlers.location.postMessage('');
+            } catch (error) {
+                showLocationStatus('위치 요청 오류: 네이티브 기능을 사용할 수 없습니다', 'error');
+            }
+        }
+
+        // 상태 메시지 표시 함수
+        function showLocationStatus(message, type = 'info') {
+            const container = document.getElementById('location-status-container');
+            const statusText = document.getElementById('location-status-text');
+            
+            if (!container || !statusText) return;
+            
+            statusText.textContent = message;
+            container.style.display = 'block';
+            
+            // 메시지 유형에 따른 색상 변경
+            if (type === 'error') {
+                container.style.backgroundColor = 'rgba(220, 53, 69, 0.9)';
+            } else if (type === 'success') {
+                container.style.backgroundColor = 'rgba(40, 167, 69, 0.9)';
+            } else {
+                container.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+            }
+        }
+
+        // 상태 메시지 숨기기 함수
+        function hideLocationStatus() {
+            const container = document.getElementById('location-status-container');
+            if (container) {
+                container.style.display = 'none';
+            }
+        }
+        """
+        
+        let script = WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        subWebView.configuration.userContentController.addUserScript(script)
+    }
+    
 
     // MARK: [자바스크립트 >> IOS 통신 부분]
     @available(iOS 8.0, *)
@@ -635,11 +771,12 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         
         if message.name == "location" {
             print("JS에서 위치 요청 받음")
-            if CLLocationManager.authorizationStatus() == .authorizedWhenInUse || CLLocationManager.authorizationStatus() == .authorizedAlways {
-                locationManager.requestLocation()
-            } else {
-                locationManager.requestWhenInUseAuthorization()
-            }
+            requestLocation()  // 새로운 함수 호출
+//            if CLLocationManager.authorizationStatus() == .authorizedWhenInUse || CLLocationManager.authorizationStatus() == .authorizedAlways {
+//                locationManager.requestLocation()
+//            } else {
+//                locationManager.requestWhenInUseAuthorization()
+//            }
         }
     }
     
@@ -1133,6 +1270,86 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
 //            mainWebView.frame = CGRect.init(x: 0, y: 0 + self.view.safeAreaInsets.top, width: self.view.frame.size.width, height: self.view.frame.size.height - self.view.safeAreaInsets.top - self.view.safeAreaInsets.bottom)
 //        }
 //    }
+    
+    // 위치 상태 레이어를 생성하는 함수
+    func createLocationStatusView() {
+        // 이미 존재한다면 제거
+        removeLocationStatusView()
+        
+        // 상태 뷰 생성
+        locationStatusView = UIView(frame: CGRect(x: 0, y: statusBarHeight + 5, width: self.view.frame.width, height: 40))
+        locationStatusView?.backgroundColor = UIColor(red: 0, green: 0, blue: 0, alpha: 0.7)
+        locationStatusView?.layer.cornerRadius = 5
+        locationStatusView?.clipsToBounds = true
+        locationStatusView?.alpha = 0 // 초기에는 투명하게 설정
+        
+        // 로딩 인디케이터 생성
+        locationIndicator = UIActivityIndicatorView(style: .white)
+        locationIndicator?.center = CGPoint(x: 25, y: 20)
+        locationIndicator?.startAnimating()
+        locationStatusView?.addSubview(locationIndicator!)
+        
+        // 상태 텍스트 라벨 생성
+        locationStatusLabel = UILabel(frame: CGRect(x: 50, y: 0, width: self.view.frame.width - 60, height: 40))
+        locationStatusLabel?.text = "위치 정보를 불러오는 중..."
+        locationStatusLabel?.textColor = .white
+        locationStatusLabel?.font = UIFont.systemFont(ofSize: 14)
+        locationStatusView?.addSubview(locationStatusLabel!)
+        
+        // 웹뷰 위에 추가
+        self.view.addSubview(locationStatusView!)
+        
+        // 애니메이션과 함께 나타나게 함
+        UIView.animate(withDuration: 0.3) {
+            self.locationStatusView?.alpha = 1
+        }
+    }
+
+    // 위치 상태 레이어를 제거하는 함수
+    func removeLocationStatusView() {
+        if locationStatusView != nil {
+            UIView.animate(withDuration: 0.3, animations: {
+                self.locationStatusView?.alpha = 0
+            }) { _ in
+                self.locationStatusView?.removeFromSuperview()
+                self.locationStatusView = nil
+                self.locationStatusLabel = nil
+                self.locationIndicator = nil
+            }
+        }
+    }
+
+    // 위치 상태 업데이트 함수
+    func updateLocationStatus(message: String, isError: Bool = false) {
+        if locationStatusView == nil {
+            createLocationStatusView()
+        }
+        
+        locationStatusLabel?.text = message
+        
+        if isError {
+            locationStatusView?.backgroundColor = UIColor(red: 0.8, green: 0.0, blue: 0.0, alpha: 0.7)
+            
+            // 에러 상태는 3초 후 자동으로 사라지게 함
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                self.removeLocationStatusView()
+            }
+        } else {
+            locationStatusView?.backgroundColor = UIColor(red: 0, green: 0, blue: 0, alpha: 0.7)
+        }
+    }
+
+    // 위치 요청 함수 - userContentController에서 호출됨
+    func requestLocation() {
+        updateLocationStatus(message: "위치 정보 요청 중...")
+        
+        if CLLocationManager.authorizationStatus() == .authorizedWhenInUse ||
+           CLLocationManager.authorizationStatus() == .authorizedAlways {
+            locationManager.requestLocation()
+        } else {
+            locationManager.requestWhenInUseAuthorization()
+        }
+    }
             
     // [외부 앱 실행 실시]
     /*
@@ -1286,10 +1503,15 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
     }
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
+        guard let location = locations.last else {
+            updateLocationStatus(message: "위치 정보를 가져올 수 없습니다.", isError: true)
+            return
+        }
 
         let lat = location.coordinate.latitude
         let lng = location.coordinate.longitude
+        
+        updateLocationStatus(message: "위치: \(String(format: "%.4f", lat)), \(String(format: "%.4f", lng)) 전송 중...")
 
         let startJs = "window.dispatchEvent(new CustomEvent('nativeLocationRequest'));"
         let endJs = """
@@ -1302,13 +1524,17 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
             // 요청 시작 알림
             self.subWebView.evaluateJavaScript(startJs, completionHandler: nil)
 
-            // 위치 전달
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            // 위치 전달 - 지연시간을 줄이고 진행상황 표시
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {  // 0.3 → 0.1로 변경
                 self.subWebView.evaluateJavaScript(endJs) { result, error in
                     if let error = error {
-                        print("JS 실행 오류: \(error)")
+                        self.updateLocationStatus(message: "위치 전송 실패: \(error.localizedDescription)", isError: true)
                     } else {
-                        print("위치 JS 전달 완료: \(lat), \(lng)")
+                        self.updateLocationStatus(message: "위치 정보가 성공적으로 전송되었습니다.")
+                        // 성공 메시지를 1초간 표시 후 제거
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            self.removeLocationStatusView()
+                        }
                     }
                 }
             }
@@ -1316,7 +1542,7 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("위치 가져오기 실패:", error.localizedDescription)
+        updateLocationStatus(message: "위치 가져오기 실패: \(error.localizedDescription)", isError: true)
 
         let failJs = "window.dispatchEvent(new CustomEvent('nativeLocationFail', { detail: { message: '\(error.localizedDescription)' } }));"
         DispatchQueue.main.async {
@@ -1325,9 +1551,16 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
     }
     
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        if status == .authorizedWhenInUse || status == .authorizedAlways {
-            print("위치 권한 승인됨 → 즉시 요청")
+        switch status {
+        case .authorizedWhenInUse, .authorizedAlways:
+            updateLocationStatus(message: "위치 정보를 가져오는 중...")
             locationManager.requestLocation()
+        case .denied, .restricted:
+            updateLocationStatus(message: "위치 권한이 거부되었습니다. 설정에서 변경해주세요.", isError: true)
+        case .notDetermined:
+            updateLocationStatus(message: "위치 권한을 요청하는 중...")
+        @unknown default:
+            updateLocationStatus(message: "알 수 없는 위치 권한 상태", isError: true)
         }
     }
 
